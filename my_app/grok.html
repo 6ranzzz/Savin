@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>简记 · 个人记账</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    .modal { animation: slideUp 0.3s ease; }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen pb-20">
+
+  <div class="max-w-[480px] mx-auto bg-white min-h-screen shadow-xl">
+
+    <!-- Header -->
+    <div class="bg-white p-5 border-b">
+      <div class="flex justify-between items-center mb-4">
+        <div>
+          <p class="text-sm text-gray-500">总资产</p>
+          <p id="totalBalance" class="text-3xl font-bold text-emerald-600">¥0.00</p>
+        </div>
+        <button onclick="openBalanceModal()" 
+          class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-full text-sm flex items-center gap-1">
+          <i class="fas fa-cog"></i> 设置初始金额
+        </button>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <button onclick="openAddModal('income')" 
+          class="py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold text-lg shadow-md">
+          ＋ 收入
+        </button>
+        <button onclick="openAddModal('expense')" 
+          class="py-4 rounded-2xl bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold text-lg shadow-md">
+          － 支出
+        </button>
+      </div>
+    </div>
+
+    <!-- Month Tabs -->
+    <div id="monthTabs" class="flex overflow-x-auto bg-white border-b whitespace-nowrap"></div>
+
+    <!-- Month Summary -->
+    <div class="grid grid-cols-2 gap-4 p-4 bg-gray-50">
+      <div class="bg-white p-4 rounded-2xl shadow-sm">
+        <p class="text-xs text-gray-500">本月收入</p>
+        <p id="monthIncome" class="text-2xl font-bold text-emerald-600 mt-1">¥0.00</p>
+      </div>
+      <div class="bg-white p-4 rounded-2xl shadow-sm">
+        <p class="text-xs text-gray-500">本月支出</p>
+        <p id="monthExpense" class="text-2xl font-bold text-red-500 mt-1">¥0.00</p>
+      </div>
+    </div>
+
+    <!-- Records -->
+    <div id="recordsList" class="p-4 space-y-6"></div>
+
+    <!-- Footer Button -->
+    <div class="fixed bottom-6 left-1/2 -translate-x-1/2 max-w-[480px] w-full px-4">
+      <button onclick="openCategoryModal()" 
+        class="w-full py-3 border border-dashed border-gray-400 text-gray-500 rounded-2xl flex items-center justify-center gap-2 hover:bg-gray-50">
+        <i class="fas fa-plus"></i> 管理自定义分类
+      </button>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal" class="hidden fixed inset-0 bg-black/60 flex items-end z-50">
+    <div class="bg-white w-full rounded-t-3xl modal max-h-[92vh] overflow-auto" id="modalContent">
+      <!-- Content will be injected by JS -->
+    </div>
+  </div>
+
+  <script>
+    // ==================== 数据 ====================
+    let records = [];
+    let initialBalance = 0;
+    let customCategories = { income: [], expense: [] };
+    let viewMonth = new Date().toISOString().slice(0,7);
+    let currentEditId = null;
+    let formType = "income";
+
+    const defaultCategories = {
+      income: [
+        { name: "工资", icon: "💰" }, { name: "奖金", icon: "🎁" },
+        { name: "理财", icon: "📈" }, { name: "兼职", icon: "💼" },
+        { name: "红包", icon: "🧧" }, { name: "其他", icon: "📌" }
+      ],
+      expense: [
+        { name: "餐饮", icon: "🍜" }, { name: "购物", icon: "🛍️" },
+        { name: "交通", icon: "🚌" }, { name: "娱乐", icon: "🎮" },
+        { name: "医疗", icon: "💊" }, { name: "住房", icon: "🏠" },
+        { name: "其他", icon: "📌" }
+      ]
+    };
+
+    const ICON_OPTIONS = ["💰","🎁","📈","💼","🧧","🏠","🍜","🛍️","🚌","🎮","💊","📚","✈️","💅","🐾","💻","🏋️","💡","☕","🍕"];
+
+    // ==================== 工具函数 ====================
+    function fmt(n) {
+      return "¥" + Math.abs(n).toFixed(2);
+    }
+
+    function getMonthKey(date) {
+      return date.toISOString().slice(0,7);
+    }
+
+    function getDateKey(date) {
+      return date.toISOString().slice(0,10);
+    }
+
+    // ==================== 渲染 ====================
+    function renderAll() {
+      renderTotalBalance();
+      renderMonthTabs();
+      renderMonthSummary();
+      renderRecords();
+    }
+
+    function renderTotalBalance() {
+      const totalIncome = records.filter(r => r.type === "income").reduce((a, b) => a + b.amount, 0);
+      const totalExpense = records.filter(r => r.type === "expense").reduce((a, b) => a + b.amount, 0);
+      const balance = initialBalance + totalIncome - totalExpense;
+      document.getElementById("totalBalance").textContent = fmt(balance);
+      document.getElementById("totalBalance").className = `text-3xl font-bold ${balance < 0 ? 'text-red-600' : 'text-emerald-600'}`;
+    }
+
+    function renderMonthTabs() {
+      const container = document.getElementById("monthTabs");
+      const months = [...new Set(records.map(r => getMonthKey(new Date(r.ts))))];
+      months.push(getMonthKey(new Date()));
+      months.sort().reverse();
+
+      container.innerHTML = months.map(m => `
+        <button onclick="changeMonth('${m}')" 
+          class="px-5 py-3 text-sm font-medium ${m === viewMonth ? 'border-b-2 border-emerald-600 text-emerald-700' : 'text-gray-500'}">
+          ${m.replace('-', '年')}月
+        </button>
+      `).join('');
+    }
+
+    function changeMonth(month) {
+      viewMonth = month;
+      renderAll();
+    }
+
+    function renderMonthSummary() {
+      const monthRecords = records.filter(r => getMonthKey(new Date(r.ts)) === viewMonth);
+      const income = monthRecords.filter(r => r.type === "income").reduce((a,b)=>a+b.amount,0);
+      const expense = monthRecords.filter(r => r.type === "expense").reduce((a,b)=>a+b.amount,0);
+
+      document.getElementById("monthIncome").textContent = fmt(income);
+      document.getElementById("monthExpense").textContent = fmt(expense);
+    }
+
+    function renderRecords() {
+      const container = document.getElementById("recordsList");
+      const monthRecords = records.filter(r => getMonthKey(new Date(r.ts)) === viewMonth);
+      
+      const grouped = {};
+      monthRecords.forEach(r => {
+        const key = getDateKey(new Date(r.ts));
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(r);
+      });
+
+      let html = '';
+      Object.keys(grouped).sort().reverse().forEach(date => {
+        const dayRecords = grouped[date];
+        const dayIncome = dayRecords.filter(r=>r.type==="income").reduce((a,b)=>a+b.amount,0);
+        const dayExpense = dayRecords.filter(r=>r.type==="expense").reduce((a,b)=>a+b.amount,0);
+
+        html += `
+          <div>
+            <div class="flex justify-between items-center mb-2 px-1">
+              <span class="font-semibold">${date.slice(5).replace('-','月')}日</span>
+              <span>
+                ${dayIncome ? `<span class="text-emerald-600">+${fmt(dayIncome)}</span>` : ''}
+                ${dayExpense ? `<span class="text-red-500 ml-3">-${fmt(dayExpense)}</span>` : ''}
+              </span>
+            </div>
+            <div class="bg-white rounded-2xl overflow-hidden shadow-sm">
+              ${dayRecords.map(r => `
+                <div onclick="editRecord(${r.id})" class="flex items-center gap-4 p-4 border-b last:border-none cursor-pointer active:bg-gray-50">
+                  <div class="w-11 h-11 rounded-2xl flex items-center justify-center text-2xl bg-gray-100">${r.icon}</div>
+                  <div class="flex-1">
+                    <div class="font-medium">${r.desc}</div>
+                    <div class="text-xs text-gray-500">${r.category}</div>
+                  </div>
+                  <div class="text-right font-semibold ${r.type==='income'?'text-emerald-600':'text-red-500'}">
+                    ${r.type==='income' ? '+' : '-'}${fmt(r.amount)}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      });
+
+      container.innerHTML = html || `<div class="text-center py-20 text-gray-400">本月还没有记账记录</div>`;
+    }
+
+    // ==================== Modal 操作 ====================
+    function showModal(content) {
+      document.getElementById("modalContent").innerHTML = content;
+      document.getElementById("modal").classList.remove("hidden");
+    }
+
+    function closeModal() {
+      document.getElementById("modal").classList.add("hidden");
+    }
+
+    // 记账表单
+    let currentAmountStr = "";
+
+    function openAddModal(type) {
+      formType = type;
+      currentAmountStr = "";
+      currentEditId = null;
+      const html = createRecordFormHTML();
+      showModal(html);
+    }
+
+    function editRecord(id) {
+      const record = records.find(r => r.id === id);
+      if (!record) return;
+      
+      formType = record.type;
+      currentAmountStr = record.amount.toString();
+      currentEditId = id;
+      
+      const html = createRecordFormHTML(record);
+      showModal(html);
+    }
+
+    function createRecordFormHTML(record = null) {
+      return `
+        <div class="p-6">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-xl font-bold">${currentEditId ? '编辑记录' : (formType==='income'?'记收入':'记支出')}</h2>
+            <button onclick="closeModal()" class="text-3xl text-gray-400">×</button>
+          </div>
+
+          <!-- 类型切换 -->
+          <div class="flex gap-2 mb-6">
+            <button onclick="switchFormType('income')" class="flex-1 py-3 rounded-xl font-medium ${formType==='income' ? 'bg-emerald-100 text-emerald-700 border-2 border-emerald-600' : 'bg-gray-100'}">收入</button>
+            <button onclick="switchFormType('expense')" class="flex-1 py-3 rounded-xl font-medium ${formType==='expense' ? 'bg-red-100 text-red-700 border-2 border-red-600' : 'bg-gray-100'}">支出</button>
+          </div>
+
+          <!-- 金额显示 -->
+          <div class="text-center mb-8">
+            <div class="text-gray-500 text-sm mb-1">金额（元）</div>
+            <div id="amountDisplay" class="text-5xl font-bold text-gray-800 min-h-[60px]">${currentAmountStr || '0.00'}</div>
+          </div>
+
+          <!-- 计算器 -->
+          <div class="grid grid-cols-4 gap-3 bg-gray-100 p-4 rounded-3xl mb-8">
+            ${['7','8','9','÷','4','5','6','×','1','2','3','-','C','0','.','+','⌫','='].map(key => `
+              <button onclick="handleCalc('${key}')" 
+                class="h-14 text-xl font-medium rounded-2xl active:scale-95 ${['C','⌫','='].includes(key) ? 'bg-gray-200' : 'bg-white shadow'}">
+                ${key}
+              </button>
+            `).join('')}
+          </div>
+
+          <button onclick="submitRecord()" 
+            class="w-full py-4 text-white font-semibold text-lg rounded-2xl ${formType==='income' ? 'bg-emerald-600' : 'bg-red-500'}">
+            ${currentEditId ? '保存修改' : '确认添加'}
+          </button>
+        </div>
+      `;
+    }
+
+    window.handleCalc = function(val) {
+      const display = document.getElementById("amountDisplay");
+      if (!display) return;
+
+      if (val === "C") {
+        currentAmountStr = "";
+      } else if (val === "⌫") {
+        currentAmountStr = currentAmountStr.slice(0, -1);
+      } else if (val === "=") {
+        try {
+          let expr = currentAmountStr.replace('×','*').replace('÷','/');
+          currentAmountStr = eval(expr).toFixed(2);
+        } catch(e) {
+          alert("计算错误");
+        }
+      } else {
+        currentAmountStr += val;
+      }
+      display.textContent = currentAmountStr || "0.00";
+    };
+
+    window.switchFormType = function(type) {
+      formType = type;
+      const html = createRecordFormHTML();
+      document.getElementById("modalContent").innerHTML = html;
+    };
+
+    window.submitRecord = function() {
+      let amount = parseFloat(currentAmountStr);
+      if (!amount || amount <= 0) {
+        alert("请输入正确金额");
+        return;
+      }
+
+      const entry = {
+        id: currentEditId || Date.now(),
+        type: formType,
+        amount: amount,
+        category: formType === "income" ? "其他" : "其他",
+        icon: "📌",
+        desc: "手动记录",
+        ts: Date.now()
+      };
+
+      if (currentEditId) {
+        records = records.map(r => r.id === currentEditId ? entry : r);
+      } else {
+        records.unshift(entry);
+      }
+
+      closeModal();
+      renderAll();
+    };
+
+    function openBalanceModal() {
+      const html = `
+        <div class="p-6">
+          <h2 class="text-xl font-bold mb-6">设置初始金额</h2>
+          <input type="number" id="balanceInput" value="${initialBalance}" 
+            class="w-full text-3xl text-center py-6 border rounded-2xl focus:outline-none focus:border-emerald-500">
+          <button onclick="saveInitialBalance()" 
+            class="w-full mt-8 py-4 bg-black text-white rounded-2xl font-semibold">确认保存</button>
+        </div>
+      `;
+      showModal(html);
+    }
+
+    window.saveInitialBalance = function() {
+      initialBalance = parseFloat(document.getElementById("balanceInput").value) || 0;
+      closeModal();
+      renderAll();
+    };
+
+    function openCategoryModal() {
+      alert("自定义分类管理功能正在开发中...\n\n你目前可以直接使用默认分类。");
+      // 后续可扩展完整分类管理
+    }
+
+    // 初始化
+    window.onload = () => {
+      renderAll();
+    };
+  </script>
+</body>
+</html>
